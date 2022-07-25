@@ -1,0 +1,135 @@
+---
+- hosts: localhost
+  vars_files:
+      - secret/aws_credentials.yml
+      - variable/variable.yml
+  tasks: 
+      - name: "Creating Security group"
+        ec2_group:
+             name: "Webserver sg"
+             description: "sg created using security group for webserver"
+             region: "ap-south-1"
+             rules:
+                 - proto: tcp
+                   from_port: 22
+                   to_port: 22
+                   cidr_ip: 0.0.0.0/0
+                 - proto: tcp
+                   from_port: '{{ wb_service_port }}'
+                   to_port: "{{ wb_service_port }}"
+                   cidr_ip: 0.0.0.0/0
+             rules_egress:
+                 - proto: all
+                   cidr_ip: 0.0.0.0/0
+             aws_access_key: "{{ aws_access_key }}"
+             aws_secret_key: "{{ aws_secret_key }}"
+
+         
+      - name: "Provisioning EC2 instances for webserver" 
+        ec2:
+            key_name: "webserverkey"
+            image: "ami-0a9d27a9f4f5c0efc"
+            instance_type: "t2.micro"
+            region: "ap-south-1"
+            wait: yes
+            group: "Webserver sg"
+            instance_tags:
+                   "name" : "webserver"
+            count: 3
+            aws_access_key: "{{ aws_access_key }}"
+            aws_secret_key: "{{ aws_secret_key }}"
+
+      - name: "Creating Security group for Load Balancer"
+        ec2_group:
+             name: "lb sg"
+             description: "sg created using security group for LoadBalancer"
+             region: "ap-south-1"
+             rules:
+                 - proto: tcp
+                   from_port: 22
+                   to_port: 22
+                   cidr_ip: 0.0.0.0/0
+                 - proto: tcp
+                   from_port: '{{ lb_service_port }}'
+                   to_port: '{{ lb_service_port }}'
+                   cidr_ip: 0.0.0.0/0
+             rules_egress:
+                 - proto: all
+                   cidr_ip: 0.0.0.0/0 
+             aws_access_key: "{{ aws_access_key }}"
+             aws_secret_key: "{{ aws_secret_key }}"
+ 
+     
+      - name: "Provisioning EC2 instances for LoadBalancer"
+        ec2:
+            key_name: "webserverkey"
+            image: "ami-0a9d27a9f4f5c0efc"
+            instance_type: "t2.micro"
+            region: "ap-south-1"
+            wait: yes
+            group: "lb sg"
+            instance_tags:
+                   "name" : "LB"
+            count: 1
+            aws_access_key: "{{ aws_access_key }}"
+            aws_secret_key: "{{ aws_secret_key }}"
+      - name: "refresh invntory"
+        meta: refresh_inventory
+
+      - pause:
+            minutes: 1
+
+
+- hosts: tag_name_webserver
+  tasks:
+     - name: "Installing Apache Webserver"    
+       package:
+           name: "httpd"
+           state: present
+
+
+     - name: "Installing php software"
+       package:
+           name: "php"
+           state: present
+
+     - name: "Copy webpage"
+       copy:
+           dest: "/var/www/html/index.php"
+           content: |
+                   <pre>
+                   <?php
+                   
+                   print `/usr/sbin/ifconfig`;
+
+                   ?>
+                   </pre>
+
+     - name: "start http server"
+       service:
+             name: "httpd"
+             state: started
+
+
+- hosts: tag_name_LB
+  vars:
+      - service_port: 8080
+  tasks:
+      - name: Installing Reverse proxy software""
+        package:
+            name: "haproxy"
+            state: present
+
+      - name: "Copying configuration file"
+        template:
+            src: "haproxy.cfg.j2"
+            dest: "/etc/haproxy/haproxy.cfg"
+        notify: "restart LB"
+
+
+  handlers:
+      - name: "restart LB"
+        service:
+            name: "haproxy"
+            state: restarted
+            enabled: yes
